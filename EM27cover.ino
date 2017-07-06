@@ -15,7 +15,8 @@
 // force the cover to close in the event of rain.
 //
 // Text commands:
-// o = Open cover
+// o = Open cover once; will not re-open after rain
+// f = Open cover and try to keep it open as much as possible
 // c = Close cover
 // ? = Report cover state (open/closed & rain)
 // 
@@ -52,6 +53,8 @@
 // Speed in  full steps per second. For 200 steps/rot and 8mm/rot this is 10 mm/sec
 #define STEP_ACCEL 1000
 // Accel in full steps per second per second
+#define TIMEOUT_MILLIS 60000
+// Timeout (in milliseconds) for the stepper drive loop
 
 #define DIRECTION_OPEN +1
 #define DIRECTION_CLOSE -1
@@ -64,6 +67,8 @@
 // used when at the open limit
 #define STATE_ERROR 3   
 // if both switches are triggered -- motor cannot move
+#define STATE_FORCEOPEN 9
+// used to keep the cover open as often as possible
 // fault codes
 #define FAULT_NONE 0
 #define FAULT_MOTOR_SHORT 1
@@ -93,8 +98,9 @@
 #define DPIN_LIMIT_OPENED 11   
 // input from limit switch
 
-// Rain sensorString outString = "";   // string for output
-#define DPIN_RAIN 12           // input from rain sensor (digital)
+// Rain 
+#define DPIN_RAIN 12           
+// input from rain sensor (digital)
 
 // Global variables
 
@@ -111,7 +117,7 @@ AccelStepper stepper(AccelStepper::DRIVER, DPIN_STEP, DPIN_DIR);  // sets up 2-w
 void setup() {
   // Start serial for input / output
   Serial.begin(9600);
-  Serial.println("EM27Sun Cover Driver v1.0");
+  Serial.println("EM27Sun Cover Driver v1.1");
   // Set up for the Stepper motor
   stepper.setPinsInverted(true,false,true); // sets direction and enable pins inverted
   stepper.setMaxSpeed(USTEP_DIVISOR * STEP_SPEED);
@@ -187,6 +193,11 @@ void loop() {
         requeststate = STATE_OPENED;
         Serial.println("User requested cover to open");
         break;
+      case 'f':
+      case 'F':
+        requeststate = STATE_FORCEOPEN;
+        Serial.println("User forced cover to open as often as possible");
+        break;
       case 'c':
       case 'C':
         requeststate = STATE_CLOSED;
@@ -200,6 +211,8 @@ void loop() {
     }
   }
   if (condition == COND_RAIN) {
+    if (requeststate == STATE_OPENED) // switch requeststate if there is rain to keep closed after 
+      requeststate = STATE_CLOSED;
     if (state != STATE_CLOSED) {
       Serial.println("Rain forced cover to close");
       fault = move_to_limit(DIRECTION_CLOSE, &duration);
@@ -212,27 +225,34 @@ void loop() {
     }
   }
   else {
-    if (state != requeststate) { 
-      // try to change state
-      if (requeststate == STATE_CLOSED) {
+    switch(requeststate) {
+      case (STATE_CLOSED):
+        if (state == STATE_CLOSED)
+          break;
         fault = move_to_limit(DIRECTION_CLOSE, &duration);
         if (fault == FAULT_MOTOR_SHORT) 
           Serial.print("Cover attempted to close but failed to reach limit in ");
         else
           Serial.print("Cover closed successfully in ");
-      }
-      else {
+        Serial.print(duration);
+        Serial.println(" seconds");
+        break;
+      case (STATE_OPENED):  
+      case (STATE_FORCEOPEN):
+        if (state == STATE_OPENED)
+          break;
         fault = move_to_limit(DIRECTION_OPEN, &duration);    
         if (fault == FAULT_MOTOR_SHORT) 
           Serial.print("Cover attempted to open but failed to reach limit in ");
         else
           Serial.print("Cover opened successfully in ");
-      }
-      Serial.print(duration);
-      Serial.println(" seconds");
+        Serial.print(duration);
+        Serial.println(" seconds");
+      default:
+        break;  // do nothing 
     }
   }
-  delay(2000); // 10Hz rep of main loop
+  delay(1000); // 1Hz rep of main loop
 }
 
 void report_state() {
@@ -296,7 +316,7 @@ int determine_fault() {
 int move_to_limit(int dir, float* elapsed_sec) {
   int continu = 1;
   int retcode, dpin_limit;
-  unsigned long startmillis;
+  unsigned long startmillis, timeout;
 
   startmillis = millis();
   // Setup digital pin for sought limit switch
@@ -309,14 +329,16 @@ int move_to_limit(int dir, float* elapsed_sec) {
   stepper.enableOutputs();
   // start motion towards sought limit
   stepper.move(dir * STEPS_FULLMOVE * USTEP_DIVISOR);
+  // set timeout TIMEOUT_MILLIS milliseconds after current time
+  timeout = startmillis + TIMEOUT_MILLIS;
   // run the motor
-  retcode = FAULT_MOTOR_SHORT;
-  while (stepper.distanceToGo() != 0) {
+  retcode = FAULT_MOTOR_SHORT;  // default return code is that the motor didn't achieve limit
+  while ( (stepper.distanceToGo() != 0) && (millis() < timeout) ) {
     if (digitalRead(dpin_limit) == LOW) {
       retcode = FAULT_NONE;
-      stepper.stop();
+      stepper.stop();  // tell the stepper to stop via decelleration ramp
     }
-    stepper.run();
+    stepper.run();  // keep running the motor
   }
   // Disable the driver (turn current off)
   stepper.disableOutputs();
