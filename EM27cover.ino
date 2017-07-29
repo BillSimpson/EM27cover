@@ -101,6 +101,10 @@
 // Rain 
 #define DPIN_RAIN 12           
 // input from rain sensor (digital)
+#define APIN_RAIN 0
+// input for analog rain sensor (analog)
+#define MILLIVOLTS_PER_COUNT 4.8828
+// Conversion factor to get millivolts per DIO count
 
 // Global variables
 
@@ -109,7 +113,7 @@ int state = STATE_UNKNOWN;
 int requeststate = STATE_CLOSED;
 int last_state = STATE_UNKNOWN;
 int fault, condition;   // global
-float duration;
+float duration, rain_mv;
 
 AccelStepper stepper(AccelStepper::DRIVER, DPIN_STEP, DPIN_DIR);  // sets up 2-wire stepper driver
 
@@ -117,7 +121,7 @@ AccelStepper stepper(AccelStepper::DRIVER, DPIN_STEP, DPIN_DIR);  // sets up 2-w
 void setup() {
   // Start serial for input / output
   Serial.begin(9600);
-  Serial.println("EM27Sun Cover Driver v1.1");
+  Serial.println("EM27Sun Cover Driver v1.2");
   // Set up for the Stepper motor
   stepper.setPinsInverted(true,false,true); // sets direction and enable pins inverted
   stepper.setMaxSpeed(USTEP_DIVISOR * STEP_SPEED);
@@ -165,6 +169,7 @@ void loop() {
   state = determine_state();  // open/closed
   condition = determine_cond(); // rain or not
   fault = determine_fault(); // check for motor fault
+  rain_mv = MILLIVOLTS_PER_COUNT * float(analogRead(APIN_RAIN));
   // print if there is a state change
   if (state != last_state) {
     if (state==STATE_OPENED) {
@@ -277,7 +282,9 @@ void report_state() {
   if (condition == COND_RAIN){
     Serial.print("condition = rain ");    
   }
-  Serial.println("");
+  Serial.print("Analog Rain Signal = ");
+  Serial.print(int(rain_mv));
+  Serial.println("mV");
 }
 
 int determine_state() {
