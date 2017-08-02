@@ -19,6 +19,7 @@
 // f = Open cover and try to keep it open as much as possible
 // c = Close cover
 // ? = Report cover state (open/closed & rain)
+// v = toggle verbose mode
 // 
 // Event feedback:
 // If the cover closes or opens, that is sent as "closing by request" or "closing by rain"
@@ -105,6 +106,11 @@
 // input for analog rain sensor (analog)
 #define MILLIVOLTS_PER_COUNT 4.8828
 // Conversion factor to get millivolts per DIO count
+#define RAIN_THRESHOLD_MV 2900
+// Threshold for rain (from 3300 mV for true full clear sky (open circuit))
+#define NUMPNTS 50
+// set number of points to average and calc standard deviation
+#define VERBOSE_DEFAULT false
 
 // Global variables
 
@@ -112,8 +118,12 @@ char commandchar;        // command character
 int state = STATE_UNKNOWN;
 int requeststate = STATE_CLOSED;
 int last_state = STATE_UNKNOWN;
-int fault, condition;   // global
+int condition = COND_CLEAR;
+int fault = FAULT_NONE;   
+int verbose_logging = VERBOSE_DEFAULT;
 float duration, rain_mv;
+int i;
+float rain_mv_sum, rain_mv_sumsqr, rain_mv_avg, rain_mv_std;
 
 AccelStepper stepper(AccelStepper::DRIVER, DPIN_STEP, DPIN_DIR);  // sets up 2-wire stepper driver
 
@@ -121,7 +131,10 @@ AccelStepper stepper(AccelStepper::DRIVER, DPIN_STEP, DPIN_DIR);  // sets up 2-w
 void setup() {
   // Start serial for input / output
   Serial.begin(9600);
-  Serial.println("EM27Sun Cover Driver v1.2");
+  Serial.println("EM27Sun Cover Driver v1.3");
+  Serial.print("Rain threshold set at ");
+  Serial.print(RAIN_THRESHOLD_MV);
+  Serial.println("mV");
   // Set up for the Stepper motor
   stepper.setPinsInverted(true,false,true); // sets direction and enable pins inverted
   stepper.setMaxSpeed(USTEP_DIVISOR * STEP_SPEED);
@@ -167,9 +180,9 @@ void setup() {
 void loop() {
   // determine current state, condition, and fault
   state = determine_state();  // open/closed
-  condition = determine_cond(); // rain or not
+// next line removed because we are going to use analog rain triggering
+// condition = determine_cond(); // rain or not
   fault = determine_fault(); // check for motor fault
-  rain_mv = MILLIVOLTS_PER_COUNT * float(analogRead(APIN_RAIN));
   // print if there is a state change
   if (state != last_state) {
     if (state==STATE_OPENED) {
@@ -210,6 +223,16 @@ void loop() {
         break;
       case '?':
         report_state();
+        break;
+      case 'v':
+      case 'V':
+        verbose_logging = !verbose_logging;
+        if (verbose_logging) {
+          Serial.println("User requested verbose logging");
+        }
+        else {
+          Serial.println("Verbose logging is off");          
+        }
         break;
       default:
         Serial.println("Command not recognized");
@@ -257,7 +280,35 @@ void loop() {
         break;  // do nothing 
     }
   }
-  delay(1000); // 1Hz rep of main loop
+  // Poll rain sensor and determine average and standard deviation
+  i = 0;
+  rain_mv_sum = 0;
+  rain_mv_sumsqr = 0;
+  while(i<NUMPNTS) {
+    // read rain sensor analog input
+    rain_mv = MILLIVOLTS_PER_COUNT * float(analogRead(APIN_RAIN));
+    // sum the values
+    rain_mv_sum += rain_mv;
+    rain_mv_sumsqr += rain_mv*rain_mv;
+    i+=1;
+    delay(1000/NUMPNTS); // Polling the rain sensor every 1000ms / N
+  } // repeat loop for 1 second user interaction time
+  // calculate avg and standard deviation
+  rain_mv_avg = rain_mv_sum / float(NUMPNTS);
+  rain_mv_std = sqrt((1/float(NUMPNTS-1)) * (rain_mv_sumsqr - float(NUMPNTS)*rain_mv_avg*rain_mv_avg));
+  if (verbose_logging) {
+    Serial.print("Rainsensor avg = ");
+    Serial.print(rain_mv_avg);
+    Serial.print(" std = ");
+    Serial.print(rain_mv_std);
+    Serial.println(" mV");
+  }
+  if ((rain_mv_avg+2*rain_mv_std) < RAIN_THRESHOLD_MV) {
+    condition = COND_RAIN;
+  }
+  else {
+    condition = COND_CLEAR;
+  }
 }
 
 void report_state() {
@@ -280,11 +331,13 @@ void report_state() {
       Serial.print("fault = driver in fault ");
   }
   if (condition == COND_RAIN){
-    Serial.print("condition = rain ");    
+    Serial.print("condition = RAIN ");    
   }
   Serial.print("Analog Rain Signal = ");
-  Serial.print(int(rain_mv));
-  Serial.println("mV");
+  Serial.print(int(rain_mv_avg));
+  Serial.print(" std = ");
+  Serial.print(rain_mv_std);
+  Serial.println(" mV");
 }
 
 int determine_state() {
