@@ -123,7 +123,8 @@ int fault = FAULT_NONE;
 int verbose_logging = VERBOSE_DEFAULT;
 float duration, rain_mv;
 int i;
-float rain_mv_sum, rain_mv_sumsqr, rain_mv_avg, rain_mv_std;
+double rain_mv_sum, rain_mv_sumsqr; 
+float rain_mv_avg, rain_mv_std;
 
 AccelStepper stepper(AccelStepper::DRIVER, DPIN_STEP, DPIN_DIR);  // sets up 2-wire stepper driver
 
@@ -131,7 +132,7 @@ AccelStepper stepper(AccelStepper::DRIVER, DPIN_STEP, DPIN_DIR);  // sets up 2-w
 void setup() {
   // Start serial for input / output
   Serial.begin(9600);
-  Serial.println("EM27Sun Cover Driver v1.3");
+  Serial.println("EM27Sun Cover Driver v1.4");
   Serial.print("Rain threshold set at ");
   Serial.print(RAIN_THRESHOLD_MV);
   Serial.println("mV");
